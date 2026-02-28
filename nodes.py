@@ -1017,15 +1017,139 @@ class RandomSubset:
         return (picked_items, merged_string, picked_indices)
 
 
+import time
+
+
+class LocalTimerStart:
+    """
+    Passthrough node that stamps the current time.
+    Connect passthrough to your workflow as normal, then wire
+    'timer' to a TimerEnd node to measure how long the nodes
+    between them took to execute.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "passthrough": ("*", {"tooltip": "Any value or list — passed through unchanged."}),
+            }
+        }
+
+    RETURN_TYPES = ("*", "TIMER")
+    RETURN_NAMES = ("passthrough", "timer")
+    OUTPUT_TOOLTIPS = (
+        "The input value(s), unchanged.",
+        "Epoch timestamp — wire this to a TimerEnd node.",
+    )
+    FUNCTION = "stamp"
+    CATEGORY = "Image Label Tools"
+    DESCRIPTION = "Records the current time and passes it to a TimerEnd node. Place this just before the node(s) you want to time."
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")  # NaN != NaN, so ComfyUI always re-executes this node
+
+    def stamp(self, passthrough):
+        return (passthrough, time.time())
+
+
+class LocalTimerEnd:
+    """
+    Receives the timestamp from a TimerStart node, computes elapsed
+    time when this node executes, and outputs the duration.
+    Multiple TimerStart/TimerEnd pairs work independently — no
+    shared global state.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "passthrough": ("*",     {"tooltip": "Any value or list — passed through unchanged."}),
+                "timer":       ("TIMER", {"tooltip": "Connect from a TimerStart node's 'timer' output."}),
+                "format":      ([
+                                    "h m s",
+                                    "hh:mm:ss",
+                                    "h",
+                                    "m",
+                                    "s",
+                                ], {
+                                    "default": "h m s",
+                                    "tooltip": (
+                                        "Output format.\n"
+                                        "h m s    → '3h 5m 2s' / '34s' (zero parts omitted)\n"
+                                        "hh:mm:ss → '03:05:02'\n"
+                                        "h        → float hours (2 dp)\n"
+                                        "m        → float minutes (2 dp)\n"
+                                        "s        → float seconds (2 dp)"
+                                    ),
+                                }),
+            }
+        }
+
+    RETURN_TYPES = ("*", "STRING", "FLOAT")
+    RETURN_NAMES = ("passthrough", "time_string", "time_float")
+    OUTPUT_TOOLTIPS = (
+        "The passthrough input, unchanged.",
+        "Elapsed time as a formatted string (empty for float-only formats).",
+        "Elapsed time as a float in the unit chosen by 'format' (0.0 for string-only formats).",
+    )
+    FUNCTION = "measure"
+    CATEGORY = "Image Label Tools"
+    DESCRIPTION = "Computes elapsed time since the paired TimerStart executed. Wire one TimerStart→TimerEnd per section you want to time."
+
+    def measure(self, passthrough, timer, format):
+        elapsed = time.time() - timer
+
+        time_string = ""
+        time_float  = 0.0
+
+        if format == "h m s":
+            h = int(elapsed // 3600)
+            m = int((elapsed % 3600) // 60)
+            s = elapsed % 60
+            s_str = f"{s:.2f}".rstrip('0').rstrip('.')
+            parts = []
+            if h:
+                parts.append(f"{h}h")
+            if m or h:
+                parts.append(f"{m}m")
+            parts.append(f"{s_str}s")
+            time_string = " ".join(parts)
+
+        elif format == "hh:mm:ss":
+            h = int(elapsed // 3600)
+            m = int((elapsed % 3600) // 60)
+            s = int(elapsed % 60)
+            time_string = f"{h:02d}:{m:02d}:{s:02d}"
+
+        elif format == "h":
+            time_float = round(elapsed / 3600, 2)
+
+        elif format == "m":
+            time_float = round(elapsed / 60, 2)
+
+        elif format == "s":
+            time_float = round(elapsed, 2)
+
+        print(f"Timer: {elapsed:.3f}s elapsed | format={format} | string='{time_string}' float={time_float}")
+
+        return (passthrough, time_string, time_float)
+
 
 NODE_CLASS_MAPPINGS = {
     'ImageEqualizer': ImageEqualizer,
     'ImageArray': ImageArray,
     'RandomSubset': RandomSubset,
+    'LocalTimerStart': LocalTimerStart,
+    'LocalTimerEnd': LocalTimerEnd,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     'ImageEqualizer': 'Image Equalizer',
     'ImageArray': 'Image Array',
     'RandomSubset': 'Random Subset',
+    'LocalTimerStart': 'Local Timer Start',
+    'LocalTimerEnd': 'Local Timer End',
 }
