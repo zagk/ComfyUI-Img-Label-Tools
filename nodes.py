@@ -278,15 +278,23 @@ class ImageArray:
                 'size_method': (['pad', 'stretch', 'crop_center', 'fill'], {'default': 'pad'}),
                 'pad': ('BOOLEAN', {'default': True}),
                 'shape': (['horizontal', 'vertical', 'square', 'smart_square', 'smart_landscape', 'smart_portrait'], {'default': 'square'}),
+                # --- Label 1 ---
                 'labels': ('STRING', {'multiline': True, 'default': ''}),
                 'label_end': (['loop', 'end'], {'default': 'loop'}),
                 'label_location': (['top', 'bottom', 'left_vert', 'left_hor', 'right_vert', 'right_hor'], {'default': 'bottom'}),
                 'label_size': ('INT', {'default': 32, 'min': 0, 'max': 200, 'step': 1}),
                 'font': (cls.font_files, {'default': font_default}),
+                # --- Label 2 ---
+                'labels2': ('STRING', {'multiline': True, 'default': ''}),
+                'label_end2': (['loop', 'end'], {'default': 'loop'}),
+                'label_location2': (['top', 'bottom', 'left_vert', 'left_hor', 'right_vert', 'right_hor'], {'default': 'top'}),
+                'label_size2': ('INT', {'default': 32, 'min': 0, 'max': 200, 'step': 1}),
+                # ---
                 'spacing': ('INT', {'default': 5, 'min': 0, 'max': 100, 'step': 1}),
             },
             'optional': {
                 'label_input': ('STRING', {'forceInput': True}),
+                'label_input2': ('STRING', {'forceInput': True}),
             }
         }
     
@@ -295,7 +303,7 @@ class ImageArray:
     OUTPUT_IS_LIST = (False, True)
     FUNCTION = 'create_array'
     CATEGORY = 'Image Label Tools'
-    DESCRIPTION = "Creates an array of images with optional labels in various layouts"
+    DESCRIPTION = "Creates an array of images with optional labels in various layouts. Supports two independent label layers."
     
     def parse_labels(self, labels_text, label_input=None):
         """Parse labels from either input or text widget"""
@@ -751,188 +759,184 @@ class ImageArray:
         
         return 1, num_images
     
-    def create_array(self, images, background, resize, size_method, pad, shape, 
-                    labels, label_end, label_location, label_size, font, spacing, label_input=None):
+    def _build_label_texts(self, num_images, label_list, label_end):
+        """Build the list of label texts for all images"""
+        texts = []
+        for i in range(num_images):
+            label_text = ''
+            if label_list:
+                if label_end == 'loop':
+                    label_idx = i % len(label_list)
+                    label_text = label_list[label_idx]
+                else:  # end
+                    if i < len(label_list):
+                        label_text = label_list[i]
+            texts.append(label_text)
+        return texts
+
+    def _apply_label_pass(self, processed_images, label_list, label_end, label_location,
+                          label_size, font, label_bg, text_color, num_images):
+        """
+        Single label pass: calculate uniform dimensions, then apply labels.
+        Returns list of PIL images with labels applied.
+        """
+        label_texts = self._build_label_texts(num_images, label_list, label_end)
+
+        # Calculate max label dimensions for uniform sizing
+        max_label_width = 0
+        max_label_height = 0
+        for i, pil_img in enumerate(processed_images):
+            lw, lh = self.calculate_label_dimensions(
+                label_texts[i], label_location, label_size, font,
+                pil_img.width, pil_img.height
+            )
+            max_label_width = max(max_label_width, lw)
+            max_label_height = max(max_label_height, lh)
+
+        # Apply labels with uniform dimensions
+        labeled = []
+        for i, pil_img in enumerate(processed_images):
+            result = self.add_label_to_image(
+                pil_img, label_texts[i], label_location,
+                label_size, font, label_bg, text_color,
+                fixed_label_width=max_label_width,
+                fixed_label_height=max_label_height
+            )
+            labeled.append(result)
+        return labeled
+
+    def create_array(self, images, background, resize, size_method, pad, shape,
+                    labels, label_end, label_location, label_size, font,
+                    labels2, label_end2, label_location2, label_size2,
+                    spacing, label_input=None, label_input2=None):
         """Create array of labeled images"""
         # Extract parameters from lists
-        background = background[0] if isinstance(background, list) else background
-        resize = resize[0] if isinstance(resize, list) else resize
-        size_method = size_method[0] if isinstance(size_method, list) else size_method
-        pad = pad[0] if isinstance(pad, list) else pad
-        shape = shape[0] if isinstance(shape, list) else shape
-        labels = labels[0] if isinstance(labels, list) else labels
-        label_end = label_end[0] if isinstance(label_end, list) else label_end
-        label_location = label_location[0] if isinstance(label_location, list) else label_location
-        label_size = label_size[0] if isinstance(label_size, list) else label_size
-        font = font[0] if isinstance(font, list) else font
-        spacing = spacing[0] if isinstance(spacing, list) else spacing
-    
+        background    = background[0]    if isinstance(background,    list) else background
+        resize        = resize[0]        if isinstance(resize,        list) else resize
+        size_method   = size_method[0]   if isinstance(size_method,   list) else size_method
+        pad           = pad[0]           if isinstance(pad,           list) else pad
+        shape         = shape[0]         if isinstance(shape,         list) else shape
+        labels        = labels[0]        if isinstance(labels,        list) else labels
+        label_end     = label_end[0]     if isinstance(label_end,     list) else label_end
+        label_location= label_location[0]if isinstance(label_location,list) else label_location
+        label_size    = label_size[0]    if isinstance(label_size,    list) else label_size
+        font          = font[0]          if isinstance(font,          list) else font
+        labels2       = labels2[0]       if isinstance(labels2,       list) else labels2
+        label_end2    = label_end2[0]    if isinstance(label_end2,    list) else label_end2
+        label_location2=label_location2[0]if isinstance(label_location2,list) else label_location2
+        label_size2   = label_size2[0]   if isinstance(label_size2,   list) else label_size2
+        spacing       = spacing[0]       if isinstance(spacing,       list) else spacing
+
         # Convert background to RGB
-        bg_color = (255, 255, 255) if background == 'white' else (0, 0, 0)
-        # FIXED: Label background is OPPOSITE of main background
-        label_bg = (0, 0, 0) if background == 'white' else (255, 255, 255)
-        # FIXED: Text color is OPPOSITE of label background
-        text_color = (255, 255, 255) if background == 'white' else (0, 0, 0)
-        # Spacing color is OPPOSITE of label background
+        bg_color    = (255, 255, 255) if background == 'white' else (0, 0, 0)
+        label_bg    = (0,   0,   0  ) if background == 'white' else (255, 255, 255)
+        text_color  = (255, 255, 255) if background == 'white' else (0, 0, 0)
         spacing_color = (255, 255, 255) if background == 'white' else (0, 0, 0)
-    
+
         # Parse labels
-        label_list = self.parse_labels(labels, label_input)
-    
+        label_list  = self.parse_labels(labels,  label_input)
+        label_list2 = self.parse_labels(labels2, label_input2)
+
         # Convert tensors to PIL images
         pil_images = []
         for img_tensor in images:
-            # Handle batch dimension - extract ALL images from batch
             if len(img_tensor.shape) == 4:
-                # Tensor is [B, H, W, C] - iterate through batch
                 for b in range(img_tensor.shape[0]):
                     img_np = (img_tensor[b].cpu().numpy() * 255).astype(np.uint8)
-                    pil_img = Image.fromarray(img_np)
-                    pil_images.append(pil_img)
+                    pil_images.append(Image.fromarray(img_np))
             else:
-                # Tensor is [H, W, C] - single image
                 img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
-                pil_img = Image.fromarray(img_np)
-                pil_images.append(pil_img)
-    
+                pil_images.append(Image.fromarray(img_np))
+
         num_images = len(pil_images)
-    
-        # STEP 1: Find target dimensions for padding (BEFORE adding labels)
-        widths = [img.width for img in pil_images]
+
+        # STEP 1: Find target dimensions (before labels)
+        widths  = [img.width  for img in pil_images]
         heights = [img.height for img in pil_images]
-    
+
         if resize == 'grow':
-            target_width = max(widths)
+            target_width  = max(widths)
             target_height = max(heights)
-        else:  # shrink
-            target_width = min(widths)
+        else:
+            target_width  = min(widths)
             target_height = min(heights)
-    
-        # STEP 2: Resize/pad all images to target dimensions if pad is enabled
+
+        # STEP 2: Resize / pad all images to uniform size
         if pad:
-            processed_images = []
-            for pil_img in pil_images:
-                processed = self.resize_image(pil_img, target_width, target_height, size_method, bg_color)
-                processed_images.append(processed)
+            processed_images = [
+                self.resize_image(img, target_width, target_height, size_method, bg_color)
+                for img in pil_images
+            ]
         else:
             processed_images = pil_images
-            # Recalculate dimensions without forcing uniform size
-            widths = [img.width for img in processed_images]
-            heights = [img.height for img in processed_images]
-            target_width = max(widths)
-            target_height = max(heights)
-    
-        # STEP 3: Calculate maximum label dimensions across all images
-        # This ensures all images get the same label padding size
-        max_label_width = 0
-        max_label_height = 0
-        
-        # Skip label calculations if label_size is 0
+            target_width  = max(img.width  for img in processed_images)
+            target_height = max(img.height for img in processed_images)
+
+        # STEP 3: Apply label pass 1 (if label_size > 0)
         if label_size > 0:
-            # Get all label texts that will be used
-            label_texts_to_use = []
-            for i in range(num_images):
-                label_text = ''
-                if label_list:
-                    if label_end == 'loop':
-                        label_idx = i % len(label_list)
-                        label_text = label_list[label_idx]
-                    else:  # end
-                        if i < len(label_list):
-                            label_text = label_list[i]
-                label_texts_to_use.append(label_text)
-            
-            # Calculate max dimensions needed
-            for i, pil_img in enumerate(processed_images):
-                lw, lh = self.calculate_label_dimensions(
-                    label_texts_to_use[i], label_location, label_size, font,
-                    pil_img.width, pil_img.height
-                )
-                max_label_width = max(max_label_width, lw)
-                max_label_height = max(max_label_height, lh)
-        else:
-            # No labels, so create empty label list
-            label_texts_to_use = [''] * num_images
-        
-        # STEP 4: Add labels to padded images using consistent dimensions
-        labeled_images = []
-        for i, pil_img in enumerate(processed_images):
-            # Only add label padding if label_size > 0
-            if label_size > 0:
-                pil_img = self.add_label_to_image(
-                    pil_img, label_texts_to_use[i], label_location, 
-                    label_size, font, label_bg, text_color,
-                    fixed_label_width=max_label_width,
-                    fixed_label_height=max_label_height
-                )
-            labeled_images.append(pil_img)
-    
+            processed_images = self._apply_label_pass(
+                processed_images, label_list, label_end,
+                label_location, label_size, font,
+                label_bg, text_color, num_images
+            )
+
+        # STEP 4: Apply label pass 2 (if label_size2 > 0)
+        if label_size2 > 0:
+            processed_images = self._apply_label_pass(
+                processed_images, label_list2, label_end2,
+                label_location2, label_size2, font,
+                label_bg, text_color, num_images
+            )
+
         # Convert labeled images (without spacing) to tensors for individual output
         labeled_tensors = []
-        for pil_img in labeled_images:
+        for pil_img in processed_images:
             img_np = np.array(pil_img).astype(np.float32) / 255.0
-            img_tensor = torch.from_numpy(img_np).unsqueeze(0)
-            labeled_tensors.append(img_tensor)
-    
-        # STEP 4.5: Add spacing border around each image (if spacing > 0)
+            labeled_tensors.append(torch.from_numpy(img_np).unsqueeze(0))
+
+        # STEP 5: Add spacing border around each image
         if spacing > 0:
-            spaced_images = []
-            for pil_img in labeled_images:
-                # Create new image with spacing border
-                new_width = pil_img.width + (spacing * 2)
-                new_height = pil_img.height + (spacing * 2)
-                spaced_img = Image.new('RGB', (new_width, new_height), spacing_color)
-                # Paste original image in center
+            spaced = []
+            for pil_img in processed_images:
+                new_w = pil_img.width  + spacing * 2
+                new_h = pil_img.height + spacing * 2
+                spaced_img = Image.new('RGB', (new_w, new_h), spacing_color)
                 spaced_img.paste(pil_img, (spacing, spacing))
-                spaced_images.append(spaced_img)
-            labeled_images = spaced_images
-    
-        # STEP 5: Calculate grid dimensions using LABELED image sizes
-        # (All images should be same size after padding + labels are uniform)
-        labeled_widths = [img.width for img in labeled_images]
-        labeled_heights = [img.height for img in labeled_images]
-        cell_width = max(labeled_widths)
-        cell_height = max(labeled_heights)
-    
-        # Calculate grid dimensions using cell dimensions for smart layouts
-        rows, cols = self.calculate_grid_dimensions(num_images, shape, cell_width, cell_height)
-    
-        # STEP 6: Create array canvas
-        if shape in ['horizontal', 'vertical']:
-            if shape == 'horizontal':
-                canvas_width = cell_width * cols
-                canvas_height = cell_height
-            else:
-                canvas_width = cell_width
-                canvas_height = cell_height * rows
-        else:
-            canvas_width = cell_width * cols
+                spaced.append(spaced_img)
+            processed_images = spaced
+
+        # STEP 6: Calculate grid
+        cell_width  = max(img.width  for img in processed_images)
+        cell_height = max(img.height for img in processed_images)
+        rows, cols  = self.calculate_grid_dimensions(num_images, shape, cell_width, cell_height)
+
+        # STEP 7: Create canvas
+        if shape == 'horizontal':
+            canvas_width  = cell_width * cols
+            canvas_height = cell_height
+        elif shape == 'vertical':
+            canvas_width  = cell_width
             canvas_height = cell_height * rows
-    
+        else:
+            canvas_width  = cell_width * cols
+            canvas_height = cell_height * rows
+
         canvas = Image.new('RGB', (canvas_width, canvas_height), bg_color)
-    
-        # STEP 7: Place images in grid
-        for i, img in enumerate(labeled_images):
+
+        # STEP 8: Place images in grid
+        for i, img in enumerate(processed_images):
             row = i // cols
             col = i % cols
-        
-            x_offset = col * cell_width
-            y_offset = row * cell_height
-        
-            # Center image in cell if not perfectly sized
-            if img.width < cell_width:
-                x_offset += (cell_width - img.width) // 2
-            if img.height < cell_height:
-                y_offset += (cell_height - img.height) // 2
-        
+            x_offset = col * cell_width  + (cell_width  - img.width)  // 2
+            y_offset = row * cell_height + (cell_height - img.height) // 2
             canvas.paste(img, (x_offset, y_offset))
-    
-        # Convert back to tensor
-        canvas_np = np.array(canvas).astype(np.float32) / 255.0
+
+        # Convert canvas to tensor
+        canvas_np     = np.array(canvas).astype(np.float32) / 255.0
         canvas_tensor = torch.from_numpy(canvas_np).unsqueeze(0)
-    
+
         print(f"Image Array: {num_images} images | {shape} layout | {canvas_width}x{canvas_height}")
-    
+
         return (canvas_tensor, labeled_tensors)
 
 
